@@ -1,0 +1,79 @@
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Load the dataset
+data = pd.read_csv(r"C:\Users\Pro\Downloads\email 1.csv")
+
+# Check the distribution of classes
+print("Class distribution:")
+print(data['Category'].value_counts())
+
+# Split the data into training (70%), validation (15%), and test (15%) sets
+X = data['Message']
+y = data['Category']
+
+# First split: 70% training, 30% temp
+X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
+
+# Second split: 50% of temp (15% of total) for validation, 50% (15% of total) for test
+X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+
+# Vectorize the text data using TF-IDF
+vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+X_train_vec = vectorizer.fit_transform(X_train)
+X_val_vec = vectorizer.transform(X_val)
+X_test_vec = vectorizer.transform(X_test)
+
+# Train a Naive Bayes classifier
+classifier = MultinomialNB()
+classifier.fit(X_train_vec, y_train)
+
+# Evaluate on validation set
+y_val_pred = classifier.predict(X_val_vec)
+
+print("\nValidation Set Metrics:")
+print("Accuracy:", accuracy_score(y_val, y_val_pred))
+print("Precision:", precision_score(y_val, y_val_pred, pos_label='spam'))
+print("Recall:", recall_score(y_val, y_val_pred, pos_label='spam'))
+print("F1-score:", f1_score(y_val, y_val_pred, pos_label='spam'))
+print("\nClassification Report:")
+print(classification_report(y_val, y_val_pred))
+
+# Confusion matrix for validation set
+cm_val = confusion_matrix(y_val, y_val_pred)
+plt.figure(figsize=(6,4))
+sns.heatmap(cm_val, annot=True, fmt='d', cmap='Blues', 
+            xticklabels=['ham', 'spam'], 
+            yticklabels=['ham', 'spam'])
+plt.title('Confusion Matrix - Validation Set')
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.show()
+
+# Final evaluation on test set
+y_test_pred = classifier.predict(X_test_vec)
+
+print("\nTest Set Metrics:")
+print("Accuracy:", accuracy_score(y_test, y_test_pred))
+print("Precision:", precision_score(y_test, y_test_pred, pos_label='spam'))
+print("Recall:", recall_score(y_test, y_test_pred, pos_label='spam'))
+print("F1-score:", f1_score(y_test, y_test_pred, pos_label='spam'))
+print("\nClassification Report:")
+print(classification_report(y_test, y_test_pred))
+
+# Confusion matrix for test set
+cm_test = confusion_matrix(y_test, y_test_pred)
+plt.figure(figsize=(6,4))
+sns.heatmap(cm_test, annot=True, fmt='d', cmap='Blues', 
+            xticklabels=['ham', 'spam'], 
+            yticklabels=['ham', 'spam'])
+plt.title('Confusion Matrix - Test Set')
+plt.ylabel('Actual')
+plt.xlabel('Predicted')
+plt.show()
