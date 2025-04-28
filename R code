@@ -1,7 +1,6 @@
-
-install.packages("tidyverse")
-install.packages("caret")
-install.packages("e1071")
+#install.packages("tidyverse")
+#install.packages("caret")
+#install.packages("e1071")
 library(tidyverse)
 library(caret)
 library(e1071)
@@ -13,13 +12,23 @@ colnames(data) <- colnames(data) %>%
   str_replace_all("Message", "text")
 
 write.csv(data, "C:/Users/hapipa yasser/email_renamed.csv", row.names = FALSE)
+cat("Columns renamed successfully and saved to 'email_renamed.csv'\n")
 
-cat(" Columns renamed successfully and saved to 'email_renamed.csv'\n")
 if (!'label' %in% names(data)) {
-  stop(" Error: 'label' column not found in the dataset. Please check your CSV file.")
+  stop("Error: 'label' column not found in the dataset. Please check your CSV file.")
 }
 
 data$label <- as.factor(data$label)
+
+if (!is.character(data$text)) {
+  data$text <- as.character(data$text)
+}
+
+data$text_length <- nchar(data$text)
+
+if (!'text_length' %in% names(data)) {
+  stop("Error: 'text_length' column not found in the dataset. Please check the calculation.")
+}
 
 set.seed(123)
 train_index <- createDataPartition(data$label, p = 0.7, list = FALSE)
@@ -39,4 +48,26 @@ conf_mat <- confusionMatrix(predictions, test_data$label)
 print(conf_mat)
 
 saveRDS(model_nb, "spam_classifier_naive_bayes_model.rds")
-cat(" Model training complete and saved as 'spam_classifier_naive_bayes_model.rds'\n")
+cat("Model training complete and saved as 'spam_classifier_naive_bayes_model.rds'\n")
+
+confusion_matrix <- as.data.frame(conf_mat$table)
+ggplot(data = confusion_matrix, aes(x = Reference, y = Prediction)) +
+  geom_tile(aes(fill = Freq), color = "white") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  geom_text(aes(label = Freq), vjust = 1) +
+  labs(title = "Confusion Matrix", x = "Actual Label", y = "Predicted Label") +
+  theme_minimal()
+
+ggplot(data, aes(x = label)) +
+  geom_bar(fill = "lightblue", color = "black") +
+  labs(title = "Distribution of Email Categories", x = "Label", y = "Count") +
+  theme_minimal()
+
+ggplot(data, aes(x = text_length, fill = label)) +
+  geom_histogram(binwidth = 5, position = "dodge", alpha = 0.7) +
+  labs(title = "Distribution of Text Length by Email Category", x = "Text Length", y = "Count") +
+  theme_minimal()
+
+ggsave("confusion_matrix_plot.png", width = 8, height = 6)
+ggsave("label_distribution_plot.png", width = 8, height = 6)
+ggsave("text_length_distribution_plot.png", width = 8, height = 6)
