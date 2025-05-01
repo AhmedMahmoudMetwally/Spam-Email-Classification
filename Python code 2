@@ -1,68 +1,274 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import tkinter as tk
+from tkinter import ttk, messagebox
+import ttkbootstrap as tb
+from ttkbootstrap.constants import *
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, classification_report
-import matplotlib.pyplot as plt
-import seaborn as sns
-# Load the dataset
-data = pd.read_csv(r"C:\Users\Pro\Downloads\email 1.csv")
-# Check the distribution of classes
-print("Class distribution:")
-print(data['Category'].value_counts())
-# Split the data into training (70%), validation (15%), and test (15%) sets
-X = data['Message']
-y = data['Category']
-# First split: 70% training, 30% temp
-X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-# Second split: 50% of temp (15% of total) for validation, 50% (15% of total) for test
-X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
-# Vectorize the text data using TF-IDF
-vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
-X_train_vec = vectorizer.fit_transform(X_train)
-X_val_vec = vectorizer.transform(X_val)
-X_test_vec = vectorizer.transform(X_test)
-# Train a Naive Bayes classifier
-classifier = MultinomialNB()
-classifier.fit(X_train_vec, y_train)
-# Evaluate on validation set
-y_val_pred = classifier.predict(X_val_vec)
+from sklearn.metrics import (accuracy_score, precision_score, recall_score, 
+                             f1_score, confusion_matrix, roc_auc_score, roc_curve)
+from wordcloud import WordCloud
+import networkx as nx
 
-print("\nValidation Set Metrics:")
-print("Accuracy:", accuracy_score(y_val, y_val_pred))
-print("Precision:", precision_score(y_val, y_val_pred, pos_label='spam'))
-print("Recall:", recall_score(y_val, y_val_pred, pos_label='spam'))
-print("F1-score:", f1_score(y_val, y_val_pred, pos_label='spam'))
-print("\nClassification Report:")
-print(classification_report(y_val, y_val_pred))
-# Confusion matrix for validation set
-cm_val = confusion_matrix(y_val, y_val_pred)
-plt.figure(figsize=(6,4))
-sns.heatmap(cm_val, annot=True, fmt='d', cmap='Blues', 
-            xticklabels=['ham', 'spam'], 
-            yticklabels=['ham', 'spam'])
-plt.title('Confusion Matrix - Validation Set')
-plt.ylabel('Actual')
-plt.xlabel('Predicted')
-plt.show()
-# Final evaluation on test set
-y_test_pred = classifier.predict(X_test_vec)
+class SpamClassifierApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Email Spam Classifier - Intelligent System")
+        self.root.geometry("1200x800")
+        
+        # Load and prepare data
+        self.load_data()
+        
+        # Create GUI
+        self.create_widgets()
+        
+    def load_data(self):
+        try:
+            self.data = pd.read_csv(r"D:\Data Science Tools and Software\Assignment2_Team\email 1.csv")
+            self.data = self.data[['Category', 'Message']].dropna()
+            self.data['Category'] = self.data['Category'].map({'ham': 0, 'spam': 1})
+            self.data.dropna(inplace=True)
+            
+            X = self.data['Message']
+            y = self.data['Category']
+            
+            # Split data
+            X_temp, X_test, y_temp, y_test = train_test_split(
+                X, y, test_size=0.15, random_state=42, stratify=y)
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_temp, y_temp, test_size=0.1765, random_state=42, stratify=y_temp)
+            
+            # Vectorize text
+            self.vectorizer = TfidfVectorizer(stop_words='english')
+            X_train_vec = self.vectorizer.fit_transform(X_train)
+            X_val_vec = self.vectorizer.transform(X_val)
+            X_test_vec = self.vectorizer.transform(X_test)
+            
+            # Train model
+            self.model = MultinomialNB()
+            self.model.fit(X_train_vec, y_train)
+            
+            # Evaluate model
+            y_pred = self.model.predict(X_test_vec)
+            y_proba = self.model.predict_proba(X_test_vec)[:,1]
+            
+            self.accuracy = accuracy_score(y_test, y_pred)
+            self.precision = precision_score(y_test, y_pred)
+            self.recall = recall_score(y_test, y_pred)
+            self.f1 = f1_score(y_test, y_pred)
+            self.auc = roc_auc_score(y_test, y_proba)
+            self.cm = confusion_matrix(y_test, y_pred)
+            self.fpr, self.tpr, _ = roc_curve(y_test, y_proba)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load data: {str(e)}")
+            self.root.destroy()
 
-print("\nTest Set Metrics:")
-print("Accuracy:", accuracy_score(y_test, y_test_pred))
-print("Precision:", precision_score(y_test, y_test_pred, pos_label='spam'))
-print("Recall:", recall_score(y_test, y_test_pred, pos_label='spam'))
-print("F1-score:", f1_score(y_test, y_test_pred, pos_label='spam'))
-print("\nClassification Report:")
-print(classification_report(y_test, y_test_pred))
-# Confusion matrix for test set
-cm_test = confusion_matrix(y_test, y_test_pred)
-plt.figure(figsize=(6,4))
-sns.heatmap(cm_test, annot=True, fmt='d', cmap='Blues', 
-            xticklabels=['ham', 'spam'], 
-            yticklabels=['ham', 'spam'])
-plt.title('Confusion Matrix - Test Set')
-plt.ylabel('Actual')
-plt.xlabel('Predicted')
-plt.show()
+    def create_widgets(self):
+        # Main container
+        main_frame = tb.Frame(self.root)
+        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Left panel - Input and results
+        left_panel = tb.Frame(main_frame)
+        left_panel.pack(side='left', fill='both', expand=True, padx=10, pady=10)
+        
+        # Right panel - Model info and plots
+        right_panel = tb.Frame(main_frame)
+        right_panel.pack(side='right', fill='both', expand=True, padx=10, pady=10)
+        
+        # Input section
+        input_frame = tb.LabelFrame(left_panel, text="Enter Email Text:", bootstyle="info")
+        input_frame.pack(fill='both', expand=True, pady=10)
+        
+        self.input_text = tk.Text(input_frame, height=10, font=('Helvetica', 12))
+        self.input_text.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Classification results
+        result_frame = tb.LabelFrame(left_panel, text="Classification Results", bootstyle="success")
+        result_frame.pack(fill='both', expand=True, pady=10)
+        
+        self.result_label = tb.Label(result_frame, text="Class: -\nProbability: -", 
+                                   font=('Helvetica', 14), justify='left')
+        self.result_label.pack(pady=20, padx=10, anchor='w')
+        
+        # Buttons
+        button_frame = tb.Frame(left_panel)
+        button_frame.pack(fill='x', pady=10)
+        
+        classify_btn = tb.Button(button_frame, text="Classify Email", bootstyle="primary",
+                                command=self.classify_email)
+        classify_btn.pack(side='left', padx=5)
+        
+        clear_btn = tb.Button(button_frame, text="Clear", bootstyle="secondary",
+                             command=self.clear_input)
+        clear_btn.pack(side='left', padx=5)
+        
+        # Quick examples
+        example_frame = tb.LabelFrame(left_panel, text="Quick Examples", bootstyle="warning")
+        example_frame.pack(fill='x', pady=10)
+        
+        ham_example_btn = tb.Button(example_frame, text="Ham Example", bootstyle="light",
+                                  command=self.load_ham_example)
+        ham_example_btn.pack(side='left', padx=5, pady=5)
+        
+        spam_example_btn = tb.Button(example_frame, text="Spam Example", bootstyle="light",
+                                   command=self.load_spam_example)
+        spam_example_btn.pack(side='left', padx=5, pady=5)
+        
+        # Model performance section
+        perf_frame = tb.LabelFrame(right_panel, text="Model Performance", bootstyle="danger")
+        perf_frame.pack(fill='both', expand=True, pady=10)
+        
+        metrics_frame = tb.Frame(perf_frame)
+        metrics_frame.pack(fill='x', pady=10)
+        
+        tb.Label(metrics_frame, text=f"Accuracy: {self.accuracy:.4f}", font=('Helvetica', 12)).pack(anchor='w')
+        tb.Label(metrics_frame, text=f"Precision: {self.precision:.4f}", font=('Helvetica', 12)).pack(anchor='w')
+        tb.Label(metrics_frame, text=f"Recall: {self.recall:.4f}", font=('Helvetica', 12)).pack(anchor='w')
+        tb.Label(metrics_frame, text=f"F1 Score: {self.f1:.4f}", font=('Helvetica', 12)).pack(anchor='w')
+        tb.Label(metrics_frame, text=f"AUC: {self.auc:.4f}", font=('Helvetica', 12)).pack(anchor='w')
+        
+        # Confusion matrix plot
+        fig, axs = plt.subplots(1, 3, figsize=(15, 4))
+
+        sns.heatmap(self.cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=['Ham', 'Spam'], 
+                    yticklabels=['Ham', 'Spam'], ax=axs[0])
+        axs[0].set_title('Confusion Matrix')
+        axs[0].set_xlabel('Predicted')
+        axs[0].set_ylabel('Actual')
+
+        # ROC Curve
+        axs[1].plot(self.fpr, self.tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {self.auc:.2f})')
+        axs[1].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        axs[1].set_xlim([0.0, 1.0])
+        axs[1].set_ylim([0.0, 1.05])
+        axs[1].set_xlabel('False Positive Rate')
+        axs[1].set_ylabel('True Positive Rate')
+        axs[1].set_title('ROC Curve')
+        axs[1].legend(loc="lower right")
+
+        # Word Cloud (from entire dataset)
+        all_text = ' '.join(self.data['Message'])
+        wordcloud = WordCloud(width=400, height=300, background_color='white',
+                              stopwords='english').generate(all_text)
+        axs[2].imshow(wordcloud, interpolation='bilinear')
+        axs[2].set_title('Word Cloud')
+        axs[2].axis('off')
+
+        canvas = FigureCanvasTkAgg(fig, master=perf_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill='both', expand=True)
+        
+        # Network Graph (top frequent words co-occurrence)
+        network_btn = tb.Button(perf_frame, text="Show Word Network", bootstyle="info", command=self.show_network_graph)
+        network_btn.pack(pady=5)
+
+        # Feedback section
+        feedback_frame = tb.LabelFrame(right_panel, text="Confirm Classification", bootstyle="info")
+        feedback_frame.pack(fill='x', pady=10)
+        
+        self.feedback_var = tk.StringVar(value="none")
+        
+        tb.Radiobutton(feedback_frame, text="Ham (Not Spam)", variable=self.feedback_var, 
+                      value="ham", bootstyle="success-toolbutton").pack(anchor='w', pady=5)
+        tb.Radiobutton(feedback_frame, text="Spam", variable=self.feedback_var, 
+                      value="spam", bootstyle="danger-toolbutton").pack(anchor='w', pady=5)
+        
+        update_btn = tb.Button(feedback_frame, text="Update Model", bootstyle="primary",
+                             command=self.update_model)
+        update_btn.pack(pady=10)
+
+    def classify_email(self):
+        message = self.input_text.get("1.0", tk.END).strip()
+        if not message:
+            messagebox.showwarning("Warning", "Please enter an email message!")
+            return
+        
+        try:
+            message_vec = self.vectorizer.transform([message])
+            prediction = self.model.predict(message_vec)[0]
+            proba = self.model.predict_proba(message_vec)[0]
+            
+            if prediction == 1:
+                self.result_label.config(text=f"Class: Spam\nProbability: {proba[1]:.3f}")
+            else:
+                self.result_label.config(text=f"Class: Ham\nProbability: {proba[0]:.3f}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Classification failed: {str(e)}")
+    
+    def clear_input(self):
+        self.input_text.delete("1.0", tk.END)
+        self.result_label.config(text="Class: -\nProbability: -")
+        self.feedback_var.set("none")
+    
+    def load_ham_example(self):
+        example = "Hi John, just checking in to see if you're available for a meeting tomorrow at 2pm."
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", example)
+    
+    def load_spam_example(self):
+        example = "Congratulations! You've won a $1000 Amazon gift card! Click here to claim your prize."
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", example)
+    
+    def update_model(self):
+        feedback = self.feedback_var.get()
+        if feedback == "none":
+            messagebox.showwarning("Warning", "Please select whether the classification was correct!")
+            return
+        
+        message = self.input_text.get("1.0", tk.END).strip()
+        if not message:
+            messagebox.showwarning("Warning", "No message to update model with!")
+            return
+        
+        try:
+            correct_label = 0 if feedback == "ham" else 1
+            new_row = pd.DataFrame({'Message': [message], 'Category': [correct_label]})
+            self.data = pd.concat([self.data, new_row], ignore_index=True)
+            X = self.data['Message']
+            y = self.data['Category']
+            X_vec = self.vectorizer.fit_transform(X)
+            self.model.fit(X_vec, y)
+            
+            messagebox.showinfo("Success", "Model updated successfully with new example!")
+            self.clear_input()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to update model: {str(e)}")
+
+    def show_network_graph(self):
+        from collections import Counter
+        from itertools import combinations
+        import re
+
+        text = ' '.join(self.data['Message']).lower()
+        words = re.findall(r'\b\w+\b', text)
+        common_words = [word for word, count in Counter(words).most_common(20)]
+        
+        edges = []
+        for i in range(len(common_words)):
+            for j in range(i+1, len(common_words)):
+                edges.append((common_words[i], common_words[j]))
+
+        G = nx.Graph()
+        G.add_edges_from(edges)
+        
+        plt.figure(figsize=(6, 6))
+        pos = nx.spring_layout(G, k=0.5)
+        nx.draw(G, pos, with_labels=True, node_color='skyblue', node_size=1200, edge_color='gray')
+        plt.title("Word Network (Top 20 Words)")
+        plt.show()
+
+if __name__ == "__main__":
+    root = tb.Window(themename="cosmo")
+    app = SpamClassifierApp(root)
+    root.mainloop()
