@@ -1,73 +1,465 @@
-#install.packages("tidyverse")
-#install.packages("caret")
-#install.packages("e1071")
-library(tidyverse)
-library(caret)
+# 📦 Load required libraries
 library(e1071)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(pROC)
+library(shiny)
+library(shinythemes)
+library(gridExtra)
+library(wordcloud)
+library(RColorBrewer)
+library(igraph)
+library(DT)
+library(ggraph)
+library(tidytext)
 
-data <- read.csv("C:/Users/Pro/Downloads/email 1.csv", stringsAsFactors = TRUE)
-
-colnames(data) <- colnames(data) %>%
-  str_replace_all("Category", "label") %>%
-  str_replace_all("Message", "text")
-
-write.csv(data, "C:/Users/hapipa yasser/email_renamed.csv", row.names = FALSE)
-cat("Columns renamed successfully and saved to 'email_renamed.csv'\n")
-
-if (!'label' %in% names(data)) {
-  stop("Error: 'label' column not found in the dataset. Please check your CSV file.")
+# 📂 Create output directory
+output_dir <- "Email_Classification_Results"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
 }
 
-data$label <- as.factor(data$label)
+# 1️⃣ Load data
+file_path <- "C:/Users/Pro/Downloads/email 1.csv"
+data <- read.csv(file_path, stringsAsFactors = FALSE)
 
-if (!is.character(data$text)) {
-  data$text <- as.character(data$text)
+# 2️⃣ Data preprocessing
+data <- data %>%
+  select(Category, Message) %>%
+  filter(!is.na(Message)) %>%
+  filter(nchar(Message) > 0)
+
+data$Category <- factor(data$Category, levels = c("ham", "spam"), labels = c(0, 1))
+data$message_length <- nchar(data$Message)
+
+# 3️⃣ Split data
+set.seed(42)
+trainIndex <- createDataPartition(data$Category, p = 0.85, list = FALSE)
+train_data <- data[trainIndex, ]
+test_data <- data[-trainIndex, ]
+
+# 4️⃣ Text processing
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("en"))
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
 }
 
-data$text_length <- nchar(data$text)
+corpus_train <- VCorpus(VectorSource(train_data$Message))
+corpus_train <- clean_corpus(corpus_train)
 
-if (!'text_length' %in% names(data)) {
-  stop("Error: 'text_length' column not found in the dataset. Please check the calculation.")
-}
+dtm_train <- DocumentTermMatrix(corpus_train, 
+                                control = list(weighting = weightTfIdf, bounds = list(global = c(5, Inf))))
+dtm_train <- removeSparseTerms(dtm_train, 0.99)
+train_matrix <- as.data.frame(as.matrix(dtm_train))
+train_matrix$Category <- train_data$Category
 
-set.seed(123)
-train_index <- createDataPartition(data$label, p = 0.7, list = FALSE)
-train_data <- data[train_index, ]
-test_data <- data[-train_index, ]
+# 5️⃣ Build SVM model
+svm_model <- svm(Category ~ ., data = train_matrix, kernel = "linear", probability = TRUE)
 
-for (col in names(train_data)) {
-  if (is.character(train_data[[col]])) {
-    train_data[[col]] <- as.factor(train_data[[col]])
-    test_data[[col]] <- as.factor(test_data[[col]])
-  }
-}
+# 6️⃣ Evaluate model
+corpus_test <- VCorpus(VectorSource(test_data$Message))
+corpus_test <- clean_corpus(corpus_test)
 
-model_nb <- naiveBayes(label ~ ., data = train_data)
-predictions <- predict(model_nb, test_data)
-conf_mat <- confusionMatrix(predictions, test_data$label)
-print(conf_mat)
+dtm_test <- DocumentTermMatrix(corpus_test, 
+                               control = list(dictionary = Terms(dtm_train), weighting = weightTfIdf))
+test_matrix <- as.data.frame(as.matrix(dtm_test))
 
-saveRDS(model_nb, "spam_classifier_naive_bayes_model.rds")
-cat("Model training complete and saved as 'spam_classifier_naive_bayes_model.rds'\n")
+missing_cols <- setdiff(names(train_matrix), names(test_matrix))
+test_matrix[missing_cols] <- 0
+test_matrix <- test_matrix[, names(train_matrix)]
 
-confusion_matrix <- as.data.frame(conf_mat$table)
-ggplot(data = confusion_matrix, aes(x = Reference, y = Prediction)) +
-  geom_tile(aes(fill = Freq), color = "white") +
-  scale_fill_gradient(low = "white", high = "blue") +
-  geom_text(aes(label = Freq), vjust = 1) +
-  labs(title = "Confusion Matrix", x = "Actual Label", y = "Predicted Label") +
+y_pred <- predict(svm_model, newdata = test_matrix)
+conf_matrix <- confusionMatrix(y_pred, test_data$Category)
+
+metrics <- data.frame(
+  Accuracy = round(conf_matrix$overall["Accuracy"], 3),
+  Precision = round(conf_matrix$byClass["Pos Pred Value"], 3),
+  Recall = round(conf_matrix$byClass["Sensitivity"], 3),
+  F1 = round(2 * (conf_matrix$byClass["Pos Pred Value"] * conf_matrix$byClass["Sensitivity"]) / 
+               (conf_matrix$byClass["Pos Pred Value"] + conf_matrix$byClass["Sensitivity"]), 3)
+)
+
+# 7️⃣ Create visualizations
+# Confusion matrix plot
+conf_plot <- ggplot(as.data.frame(conf_matrix$table), 
+                    aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "white", size = 6) +
+  scale_fill_gradient(low = "#6a51a3", high = "#4a1486") +
+  labs(title = "Confusion Matrix", x = "Predicted", y = "Actual") +
   theme_minimal()
 
-ggplot(data, aes(x = label)) +
-  geom_bar(fill = "lightblue", color = "black") +
-  labs(title = "Distribution of Email Categories", x = "Label", y = "Count") +
+# Metrics plot
+metrics_plot <- ggplot(data.frame(Metric = names(metrics), Value = unlist(metrics)), 
+                       aes(x = Metric, y = Value, fill = Metric)) +
+  geom_col() +
+  geom_text(aes(label = Value), vjust = -0.5, size = 5) +
+  ylim(0, 1.1) +
+  labs(title = "Model Performance Metrics", y = "Score") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Class distribution plot
+dist_plot <- ggplot(data, aes(x = Category, fill = Category)) +
+  geom_bar() +
+  labs(title = "Class Distribution", x = "Category", y = "Count") +
   theme_minimal()
 
-ggplot(data, aes(x = text_length, fill = label)) +
-  geom_histogram(binwidth = 5, position = "dodge", alpha = 0.7) +
-  labs(title = "Distribution of Text Length by Email Category", x = "Text Length", y = "Count") +
+# Message length distribution
+length_plot <- ggplot(data, aes(x = message_length, fill = Category)) +
+  geom_density(alpha = 0.5) +
+  scale_x_log10() +
+  labs(title = "Message Length Distribution",
+       x = "Message Length (log scale)", y = "Density") +
   theme_minimal()
 
-ggsave("confusion_matrix_plot.png", width = 8, height = 6)
-ggsave("label_distribution_plot.png", width = 8, height = 6)
-ggsave("text_length_distribution_plot.png", width = 8, height = 6)
+# ROC curve
+predictions <- predict(svm_model, test_matrix, probability = TRUE)
+probs <- attr(predictions, "probabilities")[,2]
+roc_obj <- roc(test_data$Category, probs)
+roc_plot <- ggroc(roc_obj, color = "#4a1486") +
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed") +
+  labs(title = paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")"),
+       x = "Specificity", y = "Sensitivity") +
+  theme_minimal()
+
+# Feature importance
+weights <- t(svm_model$coefs) %*% svm_model$SV
+important_words <- data.frame(
+  word = colnames(svm_model$SV),
+  weight = as.numeric(weights)
+) %>% arrange(desc(abs(weight))) %>% head(20)
+
+feature_plot <- ggplot(important_words, aes(x = reorder(word, weight), y = weight, fill = weight > 0)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 20 Important Features", 
+       x = "Word", y = "Weight in SVM Model") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Word clouds
+spam_words <- data %>% filter(Category == 1) %>% pull(Message)
+spam_corpus <- VCorpus(VectorSource(spam_words)) %>% clean_corpus()
+spam_dtm <- TermDocumentMatrix(spam_corpus)
+spam_matrix <- as.matrix(spam_dtm)
+spam_words <- sort(rowSums(spam_matrix), decreasing = TRUE)
+
+ham_words <- data %>% filter(Category == 0) %>% pull(Message)
+ham_corpus <- VCorpus(VectorSource(ham_words)) %>% clean_corpus()
+ham_dtm <- TermDocumentMatrix(ham_corpus)
+ham_matrix <- as.matrix(ham_dtm)
+ham_words <- sort(rowSums(ham_matrix), decreasing = TRUE)
+
+# Network graph
+tdm <- TermDocumentMatrix(corpus_train)
+tdm <- removeSparseTerms(tdm, 0.95)
+mat <- as.matrix(tdm)
+mat[mat > 1] <- 1
+co_occur <- mat %*% t(mat)
+
+# Save visualizations
+plots <- list(conf_plot, metrics_plot, dist_plot, length_plot, roc_plot, feature_plot)
+plot_names <- c("confusion_matrix", "performance_metrics", "class_distribution", 
+                "length_distribution", "roc_curve", "feature_importance")
+
+for (i in seq_along(plots)) {
+  ggsave(file.path(output_dir, paste0(plot_names[i], ".png")), plots[[i]], width = 8, height = 6, dpi = 300)
+}
+
+# Save word clouds
+png(file.path(output_dir, "wordclouds.png"), width = 1000, height = 500)
+par(mfrow = c(1, 2))
+wordcloud(names(spam_words), spam_words, max.words = 50, 
+          colors = brewer.pal(8, "Reds"), main = "Spam Words")
+wordcloud(names(ham_words), ham_words, max.words = 50,
+          colors = brewer.pal(8, "Blues"), main = "Ham Words")
+dev.off()
+
+# Save model and metrics
+write.csv(metrics, file.path(output_dir, "model_metrics.csv"), row.names = FALSE)
+saveRDS(svm_model, file.path(output_dir, "svm_model.rds"))
+
+# 🔵 Enhanced Shiny UI
+ui <- fluidPage(
+  theme = shinytheme("cerulean"),
+  titlePanel("📧 Email Spam Classifier - Intelligent System"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("✏️ Enter Email Text:"),
+      textAreaInput("email_text", "", "", rows = 8, placeholder = "Paste your email text here..."),
+      actionButton("predict_btn", "🚀 Classify Email", class = "btn btn-primary btn-lg"),
+      actionButton("clear_btn", "🧹 Clear", class = "btn btn-warning btn-sm"),
+      br(), br(),
+      wellPanel(
+        h4("📋 Quick Examples"),
+        actionButton("example_ham", "Ham Example", class = "btn btn-success btn-sm"),
+        actionButton("example_spam", "Spam Example", class = "btn btn-danger btn-sm")
+      ),
+      hr(),
+      wellPanel(
+        h4("✔️ Confirm Classification"),
+        radioButtons("confirm_label", "Is the predicted label correct?", 
+                     choices = list("Ham (Not Spam)" = 0, "Spam" = 1), inline = TRUE),
+        actionButton("update_model_btn", "🔄 Update Model", class = "btn btn-success btn-sm")
+      ),
+      hr(),
+      wellPanel(
+        h4("📊 Model Metrics"),
+        tableOutput("model_metrics_table"),
+        plotOutput("mini_metrics_plot", height = "200px")
+      )
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("🔍 Classification Results",
+                 uiOutput("result_box"),
+                 hr(),
+                 fluidRow(
+                   column(6, plotOutput("prob_plot", height = "300px")),
+                   column(6, plotOutput("word_impact_plot", height = "300px"))
+                 ),
+                 hr(),
+                 fluidRow(
+                   column(12, plotOutput("live_prob_plot", height = "300px"))
+                 )
+        ),
+        tabPanel("📈 Model Performance",
+                 h3("Evaluation Metrics"),
+                 plotOutput("full_metrics_plot"),
+                 hr(),
+                 plotOutput("conf_matrix_plot"),
+                 hr(),
+                 plotOutput("roc_plot"),
+                 hr(),
+                 plotOutput("feature_plot")
+        ),
+        tabPanel("📊 Data Analysis",
+                 h3("Class Distribution"),
+                 plotOutput("dist_plot"),
+                 hr(),
+                 h3("Message Length Distribution"),
+                 plotOutput("length_plot"),
+                 hr(),
+                 h3("Word Clouds"),
+                 plotOutput("wordcloud_plot", height = "500px"),
+                 hr(),
+                 h3("Word Co-occurrence Network"),
+                 plotOutput("network_plot", height = "600px")
+        ),
+        tabPanel("🔎 Misclassified Emails",
+                 h3("Examples of Misclassified Emails"),
+                 DTOutput("misclassified_table")
+        )
+      )
+    )
+  )
+)
+
+# 🔵 Enhanced Shiny Server
+server <- function(input, output, session) {
+  # Static visualizations
+  output$model_metrics_table <- renderTable({ metrics }, rownames = FALSE, digits = 3)
+  output$mini_metrics_plot <- renderPlot({ metrics_plot })
+  output$full_metrics_plot <- renderPlot({ metrics_plot })
+  output$conf_matrix_plot <- renderPlot({ conf_plot })
+  output$dist_plot <- renderPlot({ dist_plot })
+  output$length_plot <- renderPlot({ length_plot })
+  output$roc_plot <- renderPlot({ roc_plot })
+  output$feature_plot <- renderPlot({ feature_plot })
+  
+  # Word clouds
+  output$wordcloud_plot <- renderPlot({
+    par(mfrow = c(1, 2))
+    wordcloud(names(spam_words), spam_words, max.words = 50, 
+              colors = brewer.pal(8, "Reds"), main = "Spam Words")
+    wordcloud(names(ham_words), ham_words, max.words = 50,
+              colors = brewer.pal(8, "Blues"), main = "Ham Words")
+  })
+  
+  # Network graph
+  output$network_plot <- renderPlot({
+    g <- graph.adjacency(co_occur, weighted = TRUE, mode = "undirected")
+    g <- simplify(g)
+    V(g)$degree <- degree(g)
+    
+    set.seed(42)
+    plot(g, vertex.size = 3, vertex.label.cex = 0.7, 
+         edge.curved = 0.2, layout = layout_with_fr)
+  })
+  
+  # Misclassified examples
+  output$misclassified_table <- renderDT({
+    predictions <- predict(svm_model, test_matrix)
+    misclassified <- test_data[test_data$Category != predictions,]
+    datatable(misclassified, options = list(pageLength = 5))
+  })
+  
+  # Example emails
+  observeEvent(input$example_ham, {
+    updateTextAreaInput(session, "email_text", 
+                        value = "Dear customer,\n\nThank you for your purchase. Your order has been shipped and will arrive in 2-3 business days.\n\nBest regards,\nCustomer Service")
+  })
+  
+  observeEvent(input$example_spam, {
+    updateTextAreaInput(session, "email_text", 
+                        value = "Congratulations! You've won a $1000 gift card!\n\nClick here to claim your prize: http://bit.ly/freegift123\n\nLimited time offer!")
+  })
+  
+  observeEvent(input$clear_btn, {
+    updateTextAreaInput(session, "email_text", value = "")
+  })
+  
+  classification_result <- reactiveVal(NULL)
+  
+  observeEvent(input$predict_btn, {
+    req(input$email_text)
+    if (nchar(trimws(input$email_text)) == 0) {
+      showNotification("Please enter email text to classify!", type = "warning")
+      return()
+    }
+    
+    tryCatch({
+      corpus_new <- VCorpus(VectorSource(input$email_text))
+      corpus_new <- clean_corpus(corpus_new)
+      dtm_new <- DocumentTermMatrix(corpus_new, 
+                                    control = list(dictionary = Terms(dtm_train), weighting = weightTfIdf))
+      new_matrix <- as.data.frame(as.matrix(dtm_new))
+      
+      missing_cols <- setdiff(names(train_matrix)[-ncol(train_matrix)], names(new_matrix))
+      new_matrix[missing_cols] <- 0
+      new_matrix <- new_matrix[, names(train_matrix)[-ncol(train_matrix)]]
+      
+      pred <- predict(svm_model, new_matrix, probability = TRUE)
+      pred_prob <- attr(pred, "probabilities")
+      
+      classification_result(list(
+        class = ifelse(pred == 1, "Spam", "Ham"),
+        probability = round(max(pred_prob), 3),
+        words = colnames(new_matrix)[which(new_matrix[1, ] > 0)],
+        word_weights = new_matrix[1, which(new_matrix[1, ] > 0)]
+      ))
+      
+    }, error = function(e) {
+      showNotification(paste("Error processing email:", e$message), type = "error")
+    })
+  })
+  
+  output$result_box <- renderUI({
+    if (is.null(classification_result())) return()
+    result <- classification_result()
+    class <- result$class
+    prob <- result$probability
+    
+    wellPanel(
+      h4("Classification Result:"),
+      tags$p(HTML(paste0("<b>Class:</b> ", class, "<br><b>Probability:</b> ", prob)))
+    )
+  })
+  
+  # Probability plot
+  output$prob_plot <- renderPlot({
+    if (is.null(classification_result())) return()
+    result <- classification_result()
+    
+    ggplot(data.frame(Class = c("Ham", "Spam"), 
+                      Probability = c(1-result$probability, result$probability)),
+           aes(x = Class, y = Probability, fill = Class)) +
+      geom_col(width = 0.5) +
+      ylim(0, 1) +
+      scale_fill_manual(values = c("#2E8B57", "#DC143C")) +
+      labs(title = "Classification Probability") +
+      theme_minimal()
+  })
+  
+  # Word impact plot
+  output$word_impact_plot <- renderPlot({
+    if (is.null(classification_result())) return()
+    result <- classification_result()
+    
+    impact_df <- data.frame(
+      word = result$words,
+      weight = result$word_weights
+    ) %>% arrange(desc(abs(weight))) %>% head(10)
+    
+    ggplot(impact_df, aes(x = reorder(word, weight), y = weight, fill = weight > 0)) +
+      geom_col() +
+      coord_flip() +
+      labs(title = "Top Influential Words", 
+           x = "Word", y = "Impact on Classification") +
+      theme_minimal() +
+      theme(legend.position = "none")
+  })
+  
+  # Live probability plot (updates as user types)
+  output$live_prob_plot <- renderPlot({
+    req(input$email_text)
+    if (nchar(input$email_text) < 5) return()
+    
+    tryCatch({
+      corpus_new <- VCorpus(VectorSource(input$email_text))
+      corpus_new <- clean_corpus(corpus_new)
+      dtm_new <- DocumentTermMatrix(corpus_new, 
+                                    control = list(dictionary = Terms(dtm_train), weighting = weightTfIdf))
+      new_matrix <- as.data.frame(as.matrix(dtm_new))
+      
+      missing_cols <- setdiff(names(train_matrix)[-ncol(train_matrix)], names(new_matrix))
+      new_matrix[missing_cols] <- 0
+      new_matrix <- new_matrix[, names(train_matrix)[-ncol(train_matrix)]]
+      
+      pred <- predict(svm_model, new_matrix, probability = TRUE)
+      pred_prob <- attr(pred, "probabilities")[1,2]
+      
+      ggplot(data.frame(Class = c("Ham", "Spam"), 
+                        Probability = c(1-pred_prob, pred_prob)),
+             aes(x = Class, y = Probability, fill = Class)) +
+        geom_col(width = 0.5) +
+        ylim(0, 1) +
+        scale_fill_manual(values = c("#2E8B57", "#DC143C")) +
+        labs(title = "Live Classification Probability") +
+        theme_minimal()
+    }, error = function(e) {
+      NULL
+    })
+  })
+  
+  # Model updating
+  observeEvent(input$update_model_btn, {
+    req(input$email_text)
+    req(input$confirm_label)
+    
+    new_data_point <- data.frame(
+      Message = input$email_text,
+      Category = factor(as.integer(input$confirm_label), levels = c(0,1))
+    )
+    
+    train_data <<- rbind(train_data, new_data_point)
+    
+    corpus_train <- VCorpus(VectorSource(train_data$Message))
+    corpus_train <- clean_corpus(corpus_train)
+    
+    dtm_train <<- DocumentTermMatrix(corpus_train, 
+                                     control = list(weighting = weightTfIdf, bounds = list(global = c(5, Inf))))
+    dtm_train <<- removeSparseTerms(dtm_train, 0.99)
+    
+    train_matrix <<- as.data.frame(as.matrix(dtm_train))
+    train_matrix$Category <- train_data$Category
+    
+    svm_model <<- svm(Category ~ ., data = train_matrix, kernel = "linear", probability = TRUE)
+    
+    saveRDS(svm_model, file.path(output_dir, "svm_model.rds"))
+    
+    showNotification("✅ Model updated with new email successfully!", type = "message")
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
