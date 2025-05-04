@@ -1,0 +1,185 @@
+# Load required libraries
+library(e1071)
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(tm)
+library(pROC)
+
+# Create output directory
+output_dir <- "Email_Classification_Results"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir)
+}
+
+#  Load data
+file_path <- "C:/Users/Pro/Downloads/email 1.csv"
+data <- read.csv(file_path, stringsAsFactors = FALSE)
+
+#  Data preprocessing
+data <- data %>%
+  select(Category, Message) %>%
+  filter(!is.na(Message)) %>%
+  filter(nchar(Message) > 0)
+
+data$Category <- factor(data$Category, levels = c("ham", "spam"), labels = c(0, 1))
+data$message_length <- nchar(data$Message)
+
+#  Split data
+set.seed(42)
+trainIndex <- createDataPartition(data$Category, p = 0.85, list = FALSE)
+train_data <- data[trainIndex, ]
+test_data <- data[-trainIndex, ]
+
+#  Text processing
+clean_corpus <- function(corpus) {
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  corpus <- tm_map(corpus, removePunctuation)
+  corpus <- tm_map(corpus, removeNumbers)
+  corpus <- tm_map(corpus, removeWords, stopwords("en"))
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+
+corpus_train <- VCorpus(VectorSource(train_data$Message))
+corpus_train <- clean_corpus(corpus_train)
+
+dtm_train <- DocumentTermMatrix(corpus_train, 
+                                control = list(weighting = weightTfIdf, bounds = list(global = c(5, Inf))))
+dtm_train <- removeSparseTerms(dtm_train, 0.99)
+train_matrix <- as.data.frame(as.matrix(dtm_train))
+train_matrix$Category <- train_data$Category
+
+# Build SVM model
+svm_model <- svm(Category ~ ., data = train_matrix, kernel = "linear", probability = TRUE)
+
+#  Evaluate model
+corpus_test <- VCorpus(VectorSource(test_data$Message))
+corpus_test <- clean_corpus(corpus_test)
+
+dtm_test <- DocumentTermMatrix(corpus_test, 
+                               control = list(dictionary = Terms(dtm_train), weighting = weightTfIdf))
+test_matrix <- as.data.frame(as.matrix(dtm_test))
+
+missing_cols <- setdiff(names(train_matrix), names(test_matrix))
+test_matrix[missing_cols] <- 0
+test_matrix <- test_matrix[, names(train_matrix)]
+
+y_pred <- predict(svm_model, newdata = test_matrix)
+conf_matrix <- confusionMatrix(y_pred, test_data$Category)
+
+metrics <- data.frame(
+  Accuracy = round(conf_matrix$overall["Accuracy"], 3),
+  Precision = round(conf_matrix$byClass["Pos Pred Value"], 3),
+  Recall = round(conf_matrix$byClass["Sensitivity"], 3),
+  F1 = round(2 * (conf_matrix$byClass["Pos Pred Value"] * conf_matrix$byClass["Sensitivity"]) / 
+               (conf_matrix$byClass["Pos Pred Value"] + conf_matrix$byClass["Sensitivity"]), 3)
+)
+
+#  Create visualizations
+# Confusion matrix plot
+conf_plot <- ggplot(as.data.frame(conf_matrix$table), 
+                    aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "white", size = 6) +
+  scale_fill_gradient(low = "#6a51a3", high = "#4a1486") +
+  labs(title = "Confusion Matrix", x = "Predicted", y = "Actual") +
+  theme_minimal()
+
+# Metrics plot
+metrics_plot <- ggplot(data.frame(Metric = names(metrics), Value = unlist(metrics)), 
+                       aes(x = Metric, y = Value, fill = Metric)) +
+  geom_col() +
+  geom_text(aes(label = Value), vjust = -0.5, size = 5) +
+  ylim(0, 1.1) +
+  labs(title = "Model Performance Metrics", y = "Score") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Class distribution plot
+dist_plot <- ggplot(data, aes(x = Category, fill = Category)) +
+  geom_bar() +
+  labs(title = "Class Distribution", x = "Category", y = "Count") +
+  theme_minimal()
+
+# Message length distribution
+length_plot <- ggplot(data, aes(x = message_length, fill = Category)) +
+  geom_density(alpha = 0.5) +
+  scale_x_log10() +
+  labs(title = "Message Length Distribution",
+       x = "Message Length (log scale)", y = "Density") +
+  theme_minimal()
+
+# ROC curve
+predictions <- predict(svm_model, test_matrix, probability = TRUE)
+probs <- attr(predictions, "probabilities")[,2]
+roc_obj <- roc(test_data$Category, probs)
+roc_plot <- ggroc(roc_obj, color = "#4a1486") +
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed") +
+  labs(title = paste0("ROC Curve (AUC = ", round(auc(roc_obj), 3), ")"),
+       x = "Specificity", y = "Sensitivity") +
+  theme_minimal()
+
+# Feature importance
+weights <- t(svm_model$coefs) %*% svm_model$SV
+important_words <- data.frame(
+  word = colnames(svm_model$SV),
+  weight = as.numeric(weights)
+) %>% arrange(desc(abs(weight))) %>% head(20)
+
+feature_plot <- ggplot(important_words, aes(x = reorder(word, weight), y = weight, fill = weight > 0)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 20 Important Features", 
+       x = "Word", y = "Weight in SVM Model") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Extra plots (optional)
+precision_recall_plot <- ggplot(data.frame(
+  Metric = c("Precision", "Recall"),
+  Value = c(metrics$Precision, metrics$Recall)
+), aes(x = Metric, y = Value, fill = Metric)) +
+  geom_col() +
+  geom_text(aes(label = Value), vjust = -0.5, size = 5) +
+  ylim(0, 1.1) +
+  labs(title = "Precision vs Recall") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+predicted_vs_actual_plot <- ggplot(data.frame(True = test_data$Category, Predicted = y_pred),
+                                   aes(x = as.factor(True), fill = as.factor(Predicted))) +
+  geom_bar(position = "dodge")
+  labs(title = "Predicted vs Actual Classes", x = "Actual", fill = "Predicted") +
+  theme_minimal()
+
+#  Save plots into a PDF + Display plots in RStudio
+pdf(file = file.path(output_dir, "All_Plots_Report.pdf"), width = 10, height = 7)
+
+print(conf_plot)
+print(metrics_plot)
+print(dist_plot)
+print(length_plot)
+print(roc_plot)
+print(feature_plot)
+print(precision_recall_plot)
+print(predicted_vs_actual_plot)
+
+dev.off()
+
+# Display plots in RStudio Plots pane
+print(conf_plot)
+print(metrics_plot)
+print(dist_plot)
+print(length_plot)
+print(roc_plot)
+print(feature_plot)
+print(precision_recall_plot)
+print(predicted_vs_actual_plot)
+
+# Save model and metrics
+write.csv(metrics, file.path(output_dir, "model_metrics.csv"), row.names = FALSE)
+saveRDS(svm_model, file.path(output_dir, "svm_model.rds"))
+
+cat("plots have been saved and displayed successfully.\n")
+cat("PDF file location: ", file.path(output_dir, "All_Plots_Report.pdf"), "\n")
