@@ -18,7 +18,7 @@ import networkx as nx
 class SpamClassifierApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Email Spam Classifier - Intelligent System")
+        self.root.title("Email Spam Classifier - Data Science Tools and Software")
         self.root.geometry("1200x800")
         
         # Load and prepare data
