@@ -6,3 +6,4 @@ numpy
 streamlit
 seaborn
 WordCloud
+networkx 
