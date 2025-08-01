@@ -1,5 +1,10 @@
 # 🎯 **Email Spam Classifier Application Analysis**
 
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+
+
+
 **Objectives of the Code Implementation**
 Spam Detection System: Create an interactive GUI application for classifying emails as spam or ham (non-spam)
 
